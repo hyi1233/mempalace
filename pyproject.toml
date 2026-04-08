@@ -69,7 +69,7 @@ testpaths = ["tests"]
 source = ["mempalace"]
 
 [tool.coverage.report]
-fail_under = 50
+fail_under = 60
 show_missing = true
 exclude_lines = [
     "if __name__",
