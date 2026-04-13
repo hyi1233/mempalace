@@ -15,7 +15,10 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
-from .palace import SKIP_DIRS, get_collection, file_already_mined, mine_lock
+from .palace import (
+    SKIP_DIRS, get_collection, get_closets_collection,
+    file_already_mined, mine_lock, build_closet_text, upsert_closet,
+)
 
 READABLE_EXTENSIONS = {
     ".txt",
@@ -410,6 +413,7 @@ def process_file(
     rooms: list,
     agent: str,
     dry_run: bool,
+    closets_col=None,
 ) -> tuple:
     """Read, chunk, route, and file one file. Returns (drawer_count, room_name)."""
 
@@ -465,6 +469,22 @@ def process_file(
             )
             if added:
                 drawers_added += 1
+
+        # Build closet — the searchable index pointing to these drawers
+        if closets_col and drawers_added > 0:
+            drawer_ids = [
+                f"drawer_{wing}_{room}_{hashlib.sha256((source_file + str(c['chunk_index'])).encode()).hexdigest()[:24]}"
+                for c in chunks
+            ]
+            closet_text = build_closet_text(source_file, drawer_ids, content, wing, room)
+            closet_id = f"closet_{wing}_{room}_{hashlib.sha256(source_file.encode()).hexdigest()[:24]}"
+            upsert_closet(closets_col, closet_id, closet_text, {
+                "wing": wing,
+                "room": room,
+                "source_file": source_file,
+                "drawer_count": drawers_added,
+                "filed_at": datetime.now().isoformat(),
+            })
 
     return drawers_added, room
 
@@ -586,8 +606,10 @@ def mine(
 
     if not dry_run:
         collection = get_collection(palace_path)
+        closets_col = get_closets_collection(palace_path)
     else:
         collection = None
+        closets_col = None
 
     total_drawers = 0
     files_skipped = 0
@@ -602,6 +624,7 @@ def mine(
             rooms=rooms,
             agent=agent,
             dry_run=dry_run,
+            closets_col=closets_col,
         )
         if drawers == 0 and not dry_run:
             files_skipped += 1

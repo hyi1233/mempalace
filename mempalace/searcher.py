@@ -9,7 +9,7 @@ Returns verbatim text — the actual words, never summaries.
 import logging
 from pathlib import Path
 
-from .palace import get_collection
+from .palace import get_collection, get_closets_collection
 
 logger = logging.getLogger("mempalace_mcp")
 
@@ -117,7 +117,7 @@ def search_memories(
             0.0 disables filtering. Typical useful range: 0.3–1.0.
     """
     try:
-        col = get_collection(palace_path, create=False)
+        drawers_col = get_collection(palace_path, create=False)
     except Exception as e:
         logger.error("No palace found at %s: %s", palace_path, e)
         return {
@@ -127,6 +127,73 @@ def search_memories(
 
     where = build_where_filter(wing, room)
 
+    # Try closet-first search: search the compact index, then hydrate drawers
+    closet_hits = []
+    try:
+        closets_col = get_closets_collection(palace_path, create=False)
+        ckwargs = {
+            "query_texts": [query],
+            "n_results": n_results * 2,  # over-fetch closets to find best drawers
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            ckwargs["where"] = where
+        closet_results = closets_col.query(**ckwargs)
+        if closet_results["documents"][0]:
+            closet_hits = list(zip(
+                closet_results["documents"][0],
+                closet_results["metadatas"][0],
+                closet_results["distances"][0],
+            ))
+    except Exception:
+        pass  # no closets yet — fall through to direct drawer search
+
+    # If closets found results, hydrate the referenced drawers
+    if closet_hits:
+        import re
+        seen_sources = set()
+        hits = []
+        for closet_doc, closet_meta, closet_dist in closet_hits:
+            source = closet_meta.get("source_file", "")
+            if source in seen_sources:
+                continue
+            seen_sources.add(source)
+
+            # Find drawers for this source file
+            try:
+                drawer_results = drawers_col.get(
+                    where={"source_file": source},
+                    include=["documents", "metadatas"],
+                )
+                if drawer_results.get("ids"):
+                    # Combine all drawer content for this file
+                    full_text = "\n\n".join(drawer_results["documents"])
+                    meta = drawer_results["metadatas"][0]
+                    hits.append({
+                        "text": full_text,
+                        "wing": meta.get("wing", "unknown"),
+                        "room": meta.get("room", "unknown"),
+                        "source_file": Path(source).name,
+                        "similarity": round(max(0.0, 1 - closet_dist), 3),
+                        "distance": round(closet_dist, 4),
+                        "matched_via": "closet",
+                        "closet_preview": closet_doc[:200],
+                    })
+            except Exception:
+                pass
+
+            if len(hits) >= n_results:
+                break
+
+        if hits:
+            return {
+                "query": query,
+                "filters": {"wing": wing, "room": room},
+                "total_before_filter": len(closet_hits),
+                "results": hits,
+            }
+
+    # Fallback: direct drawer search (no closets yet, or closets empty)
     try:
         kwargs = {
             "query_texts": [query],
@@ -136,7 +203,7 @@ def search_memories(
         if where:
             kwargs["where"] = where
 
-        results = col.query(**kwargs)
+        results = drawers_col.query(**kwargs)
     except Exception as e:
         return {"error": f"Search error: {e}"}
 
