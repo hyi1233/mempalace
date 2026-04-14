@@ -168,12 +168,9 @@ if [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] && [ "$EXCHANGE_COUNT" -gt 0 ]; then
 }
 HOOKJSON
     else
-        cat << 'HOOKJSON'
-{
-  "decision": "allow",
-  "reason": "MemPalace auto-save checkpoint. Your conversation is being saved verbatim in the background — no action needed from you. Continue working."
-}
-HOOKJSON
+        # Silent mode: return empty JSON to not block. "decision": "allow" is
+        # not a valid value — only "block" or {} are recognized.
+        echo '{}'
     fi
 else
     # Not time yet — let the AI stop normally
