@@ -24,6 +24,23 @@ _current_lang: str = "en"
 _entity_cache: dict = {}
 
 
+def _canonical_lang(lang: str) -> str | None:
+    """Resolve a language code to its on-disk canonical filename stem.
+
+    BCP 47 tags are case-insensitive (RFC 5646 §2.1.1), and the locale
+    files mix conventions (``pt-br.json`` vs ``zh-CN.json``). Match on
+    lowercase so callers can pass ``PT-BR``, ``zh-cn``, ``Pt-Br``, etc.
+    Returns ``None`` if no file matches.
+    """
+    if not lang:
+        return None
+    target = lang.strip().lower()
+    for path in _LANG_DIR.glob("*.json"):
+        if path.stem.lower() == target:
+            return path.stem
+    return None
+
+
 def available_languages() -> list[str]:
     """Return list of available language codes."""
     return sorted(p.stem for p in _LANG_DIR.glob("*.json"))
@@ -32,12 +49,12 @@ def available_languages() -> list[str]:
 def load_lang(lang: str = "en") -> dict:
     """Load a language dictionary. Falls back to English if not found."""
     global _strings, _current_lang
-    lang_file = _LANG_DIR / f"{lang}.json"
-    if not lang_file.exists():
-        lang_file = _LANG_DIR / "en.json"
-        lang = "en"
+    canonical = _canonical_lang(lang)
+    if canonical is None:
+        canonical = "en"
+    lang_file = _LANG_DIR / f"{canonical}.json"
     _strings = json.loads(lang_file.read_text(encoding="utf-8"))
-    _current_lang = lang
+    _current_lang = canonical
     return _strings
 
 
@@ -81,9 +98,10 @@ def get_regex() -> dict:
 
 def _load_entity_section(lang: str) -> dict:
     """Load the raw entity section for one language. Returns {} if missing."""
-    lang_file = _LANG_DIR / f"{lang}.json"
-    if not lang_file.exists():
+    canonical = _canonical_lang(lang)
+    if canonical is None:
         return {}
+    lang_file = _LANG_DIR / f"{canonical}.json"
     try:
         data = json.loads(lang_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
@@ -115,7 +133,12 @@ def get_entity_patterns(languages=("en",)) -> dict:
     """
     if not languages:
         languages = ("en",)
-    key = tuple(languages)
+    # Normalize via canonical filename so callers using different casing
+    # (e.g. "PT-BR" vs "pt-br") share the same cache entry and load the
+    # same locale file. Unknown codes are kept as-is so the merge loop's
+    # "found_any" branch fires the English fallback exactly once.
+    languages = tuple(_canonical_lang(lang) or lang for lang in languages)
+    key = languages
     if key in _entity_cache:
         return _entity_cache[key]
 
